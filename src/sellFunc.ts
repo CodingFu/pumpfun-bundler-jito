@@ -17,7 +17,7 @@ import {
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import { loadKeypairs } from "./createKeys";
-import { searcherClient } from "./clients/jito";
+import { searcherClient } from "./clients/newJito";
 import { Bundle as JitoBundle } from "jito-ts/dist/sdk/block-engine/types.js";
 import promptSync from "prompt-sync";
 import * as spl from "@solana/spl-token";
@@ -247,7 +247,7 @@ export async function sellXPercentagePF() {
     }
   }
 
-  const payerNum = randomInt(0, 24);
+  const payerNum = randomInt(0, Number(process.env.NUM_WALLETS!));
   const payerKey = keypairs[payerNum];
 
   const sellPayerIxs = [];

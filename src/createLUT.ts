@@ -49,6 +49,7 @@ export async function extendLUT() {
       type: "number",
       float: true,
       round: 8,
+      initial: 0.00003,
       name: "jitoTipAmt",
       message: "Jito tip in Sol (Ex. 0.01):",
     },
@@ -92,7 +93,8 @@ export async function extendLUT() {
   // Write mint info to json
   let mintKp;
 
-  if (vanityPK === null) {
+  console.log("vanityPK", vanityPK);
+  if (!vanityPK) {
     mintKp = Keypair.generate();
   } else {
     mintKp = Keypair.fromSecretKey(bs58.decode(vanityPK));
@@ -255,7 +257,7 @@ export async function createLUT() {
     type: "number",
     float: true,
     round: 8,
-    default: 0.00003,
+    initial: "0.00003",
     name: "jitoTipAmt",
     message: "Jito tip in Sol (Ex. 0.01):",
   });
@@ -312,6 +314,8 @@ export async function createLUT() {
 
   // Append new LUT info
   poolInfo.addressLUT = lut.toString(); // Using 'addressLUT' as the field name
+
+  fs.writeFileSync(keyInfoPath, JSON.stringify(poolInfo, null, 2));
 
   try {
     const serializedMsg = createLUT.serialize();
@@ -374,7 +378,7 @@ async function sendBundle(bundledTxns: VersionedTransaction[]) {
     const bundleId = await searcherClient.sendBundle(
       new JitoBundle(bundledTxns, bundledTxns.length)
     );
-    console.log(`Bundle ${bundleId} sent.`);
+    console.log(`Bundle https://explorer.jito.wtf/bundle/${bundleId.value} sent.`);
   } catch (error) {
     console.log("inside catch");
     const err = error as any;

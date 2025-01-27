@@ -7,11 +7,12 @@ import {
   LAMPORTS_PER_SOL,
   TransactionMessage,
   Blockhash,
+  AddressLookupTableAccount,
 } from "@solana/web3.js";
 import { loadKeypairs } from "./createKeys";
 import { wallet, connection, payer } from "../config";
 import * as spl from "@solana/spl-token";
-import { searcherClient } from "./clients/jito";
+import { searcherClient } from "./clients/newJito";
 import { Bundle as JitoBundle } from "jito-ts/dist/sdk/block-engine/types.js";
 import promptSync from "prompt-sync";
 import { createLUT, extendLUT } from "./createLUT";
@@ -39,7 +40,7 @@ interface Buy {
 
 async function generateSOLTransferForKeypairs(
   tipAmt: number,
-  steps: number = 24
+  steps: number = Number(process.env.NUM_WALLETS!)
 ): Promise<TransactionInstruction[]> {
   const keypairs: Keypair[] = loadKeypairs();
   const ixs: TransactionInstruction[] = [];
@@ -218,7 +219,8 @@ async function sendBundle(txns: VersionedTransaction[]) {
     const bundleId = await searcherClient.sendBundle(
       new JitoBundle(txns, txns.length)
     );
-    console.log(`Bundle ${bundleId} sent.`);
+    console.log("Bundle ID: ", bundleId);
+    console.log(`Bundle ${bundleId.ok} ${bundleId.value} sent.`);
   } catch (error) {
     const err = error as any;
     console.error("Error sending bundle:", err.message);
@@ -238,7 +240,7 @@ async function generateATAandSOL() {
     type: "number",
     float: true,
     round: 8,
-    default: 0.00003,
+    initial: 0.00003,
     name: "jitoTipAmt",
     message: "Jito tip in Sol (Ex. 0.01):",
   });
@@ -248,6 +250,8 @@ async function generateATAandSOL() {
   const sendTxns: VersionedTransaction[] = [];
 
   const solIxs = await generateSOLTransferForKeypairs(jitoTipAmt);
+
+  console.log("generated sol ixs");
 
   const solTxns = await processInstructionsSOL(solIxs, blockhash);
   sendTxns.push(...solTxns);
@@ -260,8 +264,15 @@ async function createReturns() {
   const keypairs = loadKeypairs();
   const chunkedKeypairs = chunkArray(keypairs, 7); // EDIT CHUNKS?
 
-  const jitoTipIn = prompt("Jito tip in Sol (Ex. 0.01): ");
-  const TipAmt = parseFloat(jitoTipIn) * LAMPORTS_PER_SOL;
+  const answer = await prompts({
+    type: "number",
+    float: true,
+    round: 8,
+    initial: 0.00003,
+    name: "jitoTipAmt",
+    message: "Jito tip in Sol (Ex. 0.01):",
+  });
+  const TipAmt = +answer.jitoTipAmt * LAMPORTS_PER_SOL;
 
   const { blockhash } = await connection.getLatestBlockhash();
 
@@ -301,11 +312,16 @@ async function createReturns() {
 
     const lut = new PublicKey(poolInfo.addressLUT.toString());
 
+    const lookupTableAccount = await connection.getAddressLookupTable(lut).then((res) => res.value);
+    if (!lookupTableAccount) {
+      throw new Error('Could not fetch lookup table');
+    }
+
     const message = new TransactionMessage({
       payerKey: payer.publicKey,
       recentBlockhash: blockhash,
       instructions: instructionsForChunk,
-    }).compileToV0Message([poolInfo.addressLUT]);
+    }).compileToV0Message([lookupTableAccount]);
 
     const versionedTx = new VersionedTransaction(message);
 
@@ -348,7 +364,7 @@ async function simulateAndWriteBuys() {
     percentSupply: number;
   }[] = [];
 
-  for (let it = 0; it <= 24; it++) {
+  for (let it = 0; it <= Number(process.env.NUM_WALLETS!); it++) {
     let keypair;
 
     let solInput;
@@ -358,7 +374,7 @@ async function simulateAndWriteBuys() {
         float: true,
         round: 8,
         name: 'solInput',
-        default: 1,
+        initial: 0.01,
         message: "Enter the amount of SOL for dev wallet:"
       })
       solInput = Number(solResult.solInput) * 1.21;
@@ -368,7 +384,7 @@ async function simulateAndWriteBuys() {
         type: 'number',
         float: true,
         round: 8,
-        default: 0.1,
+        initial: 0.01,
         name: 'solInput',
         message: `Enter the amount of SOL for wallet ${it}: `
       })
@@ -441,6 +457,7 @@ async function simulateAndWriteBuys() {
   const confirm = await prompts({
     type: "text",
     name: "confirm",
+    initial: "yes",
     message: "Do you want to use these buys? (yes/no): ",
   });
   if (confirm.confirm.toLowerCase() === "yes") {

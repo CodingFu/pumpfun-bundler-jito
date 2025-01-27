@@ -22,7 +22,7 @@ import {
   AddressLookupTableAccount,
 } from "@solana/web3.js";
 import { loadKeypairs } from "./createKeys";
-import { searcherClient } from "./clients/jito";
+import { searcherClient } from "./clients/newJito";
 import { Bundle as JitoBundle } from "jito-ts/dist/sdk/block-engine/types.js";
 import promptSync from "prompt-sync";
 import * as spl from "@solana/spl-token";
@@ -36,6 +36,8 @@ import axios from "axios";
 import * as anchor from "@coral-xyz/anchor";
 
 const prompt = promptSync();
+import prompts from "prompts";
+import { PumpFunSDK } from "pumpdotfun-sdk";
 const keyInfoPath = path.join(__dirname, "keyInfo.json");
 
 export async function buyBundle() {
@@ -73,13 +75,49 @@ export async function buyBundle() {
   }
 
   // -------- step 1: ask nessesary questions for pool build --------
-  const name = prompt("Name of your token: ");
-  const symbol = prompt("Symbol of your token: ");
-  const description = prompt("Description of your token: ");
-  const twitter = prompt("Twitter of your token: ");
-  const telegram = prompt("Telegram of your token: ");
-  const website = prompt("Website of your token: ");
-  const tipAmt = +prompt("Jito tip in SOL: ") * LAMPORTS_PER_SOL;
+  const response = await prompts([
+    {
+      type: "text",
+      name: "name",
+      message: "Name of your token: ",
+    },
+    {
+      type: "text",
+      name: "symbol",
+      message: "Symbol of your token: ",
+    },
+    {
+      type: "text",
+      name: "description",
+      message: "Description of your token: ",
+    },
+    {
+      type: "text",
+      name: "twitter",
+      message: "Twitter of your token: ",
+    },
+    {
+      type: "text",
+      name: "telegram",
+      message: "Telegram of your token: ",
+    },
+    {
+      type: "text",
+      name: "website",
+      message: "Website of your token: ",
+    },
+    {
+      type: "number",
+      float: true,
+      initial: 0.00003,
+      name: "tipAmtSol",
+      message: "Jito tip in SOL: ",
+    },
+  ]);
+  const { name, symbol, description, twitter, telegram, website, tipAmtSol } = response;
+  const tipAmt = +tipAmtSol * LAMPORTS_PER_SOL;
+
+  const pumpfunSdk = new PumpFunSDK(provider);
 
   // -------- step 2: build pool init + dev snipe --------
   const files = await fs.promises.readdir("./img");
@@ -95,29 +133,24 @@ export async function buyBundle() {
   }
   const data: Buffer = fs.readFileSync(`./img/${files[0]}`);
 
-  let formData = new FormData();
-  if (data) {
-    formData.append("file", new Blob([data], { type: "image/jpeg" }));
-  } else {
-    console.log("No image found");
-    return;
-  }
+  // Convert Buffer to Blob
+  const blob = new Blob([data], { type: 'image/png' });
 
-  formData.append("name", name);
-  formData.append("symbol", symbol);
-  formData.append("description", description);
-  formData.append("twitter", twitter);
-  formData.append("telegram", telegram);
-  formData.append("website", website);
-  formData.append("showName", "true");
+  let metadata_uri = "";
 
-  let metadata_uri;
   try {
-    const response = await axios.post("https://pump.fun/api/ipfs", formData, {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
-    });
+    const url = "https://pump.fun/api/ipfs";
+    const formData = new FormData();
+    formData.append("name", name);
+    formData.append("symbol", symbol);
+    formData.append("description", description);
+    formData.append("file", blob, "image.png");
+    formData.append("website", website);
+    formData.append("twitter", twitter);
+    formData.append("telegram", telegram);
+    formData.append("video", "");
+    const response = await axios.post(url, formData);
+    console.log("created metadata", response.data);
     metadata_uri = response.data.metadataUri;
     console.log("Metadata URI: ", metadata_uri);
   } catch (error) {
@@ -133,6 +166,18 @@ export async function buyBundle() {
     [Buffer.from("bonding-curve"), mintKp.publicKey.toBytes()],
     program.programId
   );
+  console.log("Bonding curve: ", bondingCurve.toBase58());
+
+  let [associatedBondingCurve] = PublicKey.findProgramAddressSync(
+    [
+      bondingCurve.toBytes(),
+      spl.TOKEN_PROGRAM_ID.toBytes(),
+      mintKp.publicKey.toBytes(),
+    ],
+    spl.ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  console.log("Associated bonding curve: ", associatedBondingCurve.toBase58());
+
   const [metadata] = PublicKey.findProgramAddressSync(
     [
       Buffer.from("metadata"),
@@ -141,10 +186,13 @@ export async function buyBundle() {
     ],
     MPL_TOKEN_METADATA_PROGRAM_ID
   );
+  console.log("Metadata: ", metadata.toBase58());
+
 
   const account1 = mintKp.publicKey;
   const account2 = mintAuthority;
   const account3 = bondingCurve;
+  const account4 = associatedBondingCurve;
   const account5 = global;
   const account6 = MPL_TOKEN_METADATA_PROGRAM_ID;
   const account7 = metadata;
@@ -155,6 +203,7 @@ export async function buyBundle() {
       mint: account1,
       mintAuthority: account2,
       bondingCurve: account3,
+      associatedBondingCurve: account4,
       global: account5,
       mplTokenMetadata: account6,
       metadata: account7,
@@ -168,11 +217,14 @@ export async function buyBundle() {
     })
     .instruction();
 
+  console.log("Create Ix: ", createIx.toString());
+
   // Get the associated token address
   const ata = spl.getAssociatedTokenAddressSync(
     mintKp.publicKey,
     wallet.publicKey
   );
+
   const ataIx = spl.createAssociatedTokenAccountIdempotentInstruction(
     wallet.publicKey,
     ata,
@@ -199,6 +251,7 @@ export async function buyBundle() {
       feeRecipient,
       mint: mintKp.publicKey,
       bondingCurve,
+      associatedBondingCurve,
       associatedUser: ata,
       user: wallet.publicKey,
       systemProgram: SystemProgram.programId,
@@ -236,6 +289,7 @@ export async function buyBundle() {
     keypairs,
     lookupTableAccount,
     bondingCurve,
+    associatedBondingCurve,
     mintKp.publicKey,
     program
   );
@@ -260,6 +314,8 @@ export async function buyBundle() {
             }
         }
         */
+
+  console.log("------------------ SENDING BUNDLE ------------------");
 
   await sendBundle(bundledTxns);
 }
@@ -338,6 +394,7 @@ async function createWalletSwaps(
           mint,
           bondingCurve,
           associatedBondingCurve,
+          associatedUser: ataAddress,
           user: keypair.publicKey,
           systemProgram: SystemProgram.programId,
           tokenProgram: spl.TOKEN_PROGRAM_ID,
@@ -416,7 +473,7 @@ export async function sendBundle(bundledTxns: VersionedTransaction[]) {
     const bundleId = await searcherClient.sendBundle(
       new JitoBundle(bundledTxns, bundledTxns.length)
     );
-    console.log(`Bundle ${bundleId} sent.`);
+    console.log(`Bundle ${bundleId.ok} ${bundleId.value} sent.`);
 
     ///*
     // Assuming onBundleResult returns a Promise<BundleResult>
